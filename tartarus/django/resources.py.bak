@@ -1,0 +1,143 @@
+from django.contrib.admin.sites import site
+from django.views.generic import View, ListView, DetailView, CreateView, UpdateView, DeleteView 
+from django.views.generic.detail import SingleObjectMixin
+from django.views.generic.list import MultipleObjectMixin
+from django.conf.urls.defaults import include, url, patterns
+from tartarus.string import camelcase_split
+import inspect
+
+class ResourceMetaclass(type):
+    def __new__(self, classname, bases, classDict):
+        def get_system_name(name):
+            return camelcase_split(name, '-')
+            
+        def update_views_names(classDict):
+            for name, member in classDict.items():
+                if inspect.isclass(member) and issubclass(member, View):
+                    if not hasattr(member, 'name'):
+                        member.name = get_system_name(name)
+        
+        update_views_names(classDict)
+        if not classDict.has_key('name'):
+            classDict['name'] = get_system_name(classname)
+        return type.__new__(self, classname, bases, classDict)
+
+class Resource(object):
+    
+    __metaclass__= ResourceMetaclass
+    
+    def __init__(self, *args, **kwargs):
+        if kwargs.has_key('name'):
+            self.name = kwargs['name']
+        elif not hasattr(self, 'name'):
+            self.name = self.__class__.__name__
+    
+    def get_views(self):
+        views = [member for name, member in inspect.getmembers(self, inspect.isclass) if issubclass(member, View)]
+        return views
+        
+    def get_urls(self):
+        views = self.get_views()
+        urls = []
+        for view in views:
+            urls.append(
+                url(
+                    r'%s' % getattr(view, 'path', view.name),
+                    view.as_view(),
+                    name='%s#%s' % (self.name, view.name)
+                )
+            )
+        return url(r'^%s' % getattr(self, 'path', self.name), include(urls))
+
+class ModelResourceMetaclass(ResourceMetaclass):
+    def __new__(self, classname, bases, classDict):
+        def set_attributes_to_inner_classes(attributes, classDict, parent):
+            objects = [member for name, member in classDict.items() if inspect.isclass(member) and issubclass(member, parent)]
+            for attr in attributes:
+                if classDict.has_key(attr):
+                    for o in objects:
+                        setattr(o, attr, classDict[attr])
+        
+        single_attributes = ['model', 'queryset', 'slug_field', 'context_object_name']
+        multiple_attributes = ['allow_empty', 'model', 'queryset', 'paginate_by', 'context_object_name', 'paginator_class']
+        set_attributes_to_inner_classes(single_attributes, classDict, SingleObjectMixin)
+        set_attributes_to_inner_classes(multiple_attributes, classDict, MultipleObjectMixin)
+        return ResourceMetaclass.__new__(self, classname, bases, classDict)
+        
+        
+
+
+class ModelResource(Resource):
+    
+    __metaclass__ = ModelResourceMetaclass
+    
+    class Index(ListView):
+        pass
+    
+    class Detail(DetailView):
+        pass
+    
+    class Create(CreateView):
+        pass
+    
+    class Update(UpdateView):
+        pass
+    
+    class Delete(DeleteView):
+        pass
+    
+
+def autodiscover():
+    """
+    Auto-discover INSTALLED_APPS views.py modules and fail silently when
+    not present. This forces an import on them to register any views bits they
+    may want.
+    """
+
+    import copy
+    from django.conf import settings
+    from django.utils.importlib import import_module
+    from django.utils.module_loading import module_has_submodule
+
+    for app in settings.INSTALLED_APPS:
+        mod = import_module(app)
+        # Attempt to import the app's admin module.
+        try:
+            before_import_registry = copy.copy(site._registry)
+            import_module('%s.views' % app)
+        except:
+            # Reset the model registry to the state before the last import as
+            # this import will have to reoccur on the next request and this
+            # could raise NotRegistered and AlreadyRegistered exceptions
+            # (see #8245).
+            site._registry = before_import_registry
+
+            # Decide whether to bubble up this error. If the app just
+            # doesn't have an views module, we can ignore the error
+            # attempting to import it, otherwise we want it to bubble up.
+            if module_has_submodule(mod, 'views'):
+                raise
+    
+    #resources = [r() for r in Resource.__subclasses__() if not r is ModelResource]
+    leafs = get_leaf_subclasses(Resource)
+    resources = [r() for r in leafs if r is not ModelResource]
+    resource_patterns = []
+    for r in resources:
+        resource_patterns += patterns('', r.get_urls())
+    return resource_patterns
+
+
+def get_leaf_subclasses(base, ignore=[]):
+    leafs=[]
+    for c in base.__subclasses__():
+        if c not in ignore:
+            ignore.append(c)
+            if c not in leafs:
+                if not c.__subclasses__():
+                    leafs.append(c)
+                else:
+                    leafs += get_leaf_subclasses(c, ignore)
+    return leafs
+            
+            
+            
