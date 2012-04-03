@@ -1,5 +1,6 @@
 import inspect
 
+
 def config(target, **kwargs):
     for k, v in kwargs.items():
         setattr(target, k, v)
@@ -37,4 +38,9 @@ def get_leaf_subclasses(base, ignore=[], filter=None, attribute='is_usable'):
     return leafs
             
             
+def capfirst(x):
+    return x and x[0].upper() + x[1:]
             
+def underscore_to_label(string):
+    string = string.replace('_', ' ')
+    return capfirst(string)

@@ -173,7 +173,7 @@ class Input(object):
             choices = lower_keys(choices)
 
         if default not in choices.values():
-            if defaultnot in choices.keys():
+            if default not in choices.keys():
                 raise ValueError("invalid default answer: '%s'" % default)
             else:
                 default=choices[default]
